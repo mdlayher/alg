@@ -15,3 +15,22 @@ transformations), using this package may result in a performance boost.
 
 If this package does end up being useful for you, please do reach out!
 I'd love to hear what you're doing with it.
+
+Benchmarking
+------------
+
+To benchmark `AF_ALG` transformations vs. the Go standard library equivalents
+on a given system, run the following commands:
+
+```
+$ go test -c
+$ ./alg.test -bench.std -test.bench . | tee std.txt
+$ ./alg.test -bench.alg -test.bench . | tee alg.txt
+$ benchcmp std.txt alg.txt
+```
+
+The `benchcmp` utility can be installed using:
+
+```
+$ go get golang.org/x/tools/cmd/benchcmp
+```
