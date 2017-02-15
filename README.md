@@ -11,7 +11,7 @@ The benefit of `AF_ALG` sockets is that they enable access to the Linux kernel's
 cryptography API, and may be able to use hardware acceleration to perform
 certain transformations.  On systems with dedicated cryptography processing
 hardware (or systems without assembly implementations of certain
-transformations), using this package's may result in a performance boost.
+transformations), using this package may result in a performance boost.
 
 If this package does end up being useful for you, please do reach out!
 I'd love to hear what you're doing with it.
