@@ -12,6 +12,8 @@ import (
 	"fmt"
 	"hash"
 	"io"
+	"log"
+	"os"
 	"testing"
 
 	"github.com/mdlayher/alg"
@@ -19,7 +21,7 @@ import (
 
 const MB = (1 << 20)
 
-var buf = make([]byte, 512*MB)
+var buf = bytes.Repeat([]byte("a"), 512*MB)
 
 // Flags to specify using either stdlib or AF_ALG transformations.
 var (
@@ -87,6 +89,7 @@ func testHashEqual(t *testing.T, expect string, stdh, algh hash.Hash) {
 
 	cb := stdh.Sum(nil)
 	ab := algh.Sum(nil)
+	log.Printf("%x\n%x", cb, ab)
 
 	if want, got := cb, ab; !bytes.Equal(want, got) {
 		t.Fatalf("unexpected hash sum:\n- std: %x\n- alg: %x", want, got)
@@ -100,8 +103,18 @@ func testHashEqual(t *testing.T, expect string, stdh, algh hash.Hash) {
 
 func benchmarkHashes(b *testing.B, stdh, algh hash.Hash) {
 	sizes := []int64{
-		1,
-		32,
+		/*
+			1,
+			32,
+			64,
+			128,
+			256,
+		*/
+		512,
+	}
+
+	pages := []int{
+		16,
 		64,
 		128,
 		256,
@@ -109,38 +122,42 @@ func benchmarkHashes(b *testing.B, stdh, algh hash.Hash) {
 	}
 
 	for _, size := range sizes {
-		name := fmt.Sprintf("%dMB", size)
-		switch {
-		case *flagBenchSTD && *flagBenchALG:
-			b.Fatal("cannot specify both '-bench.std' and '-bench.alg'")
-		case *flagBenchSTD:
-			b.Run(name, func(b *testing.B) {
-				benchmarkHash(b, size*MB, stdh)
-			})
-		case *flagBenchALG:
-			b.Run(name, func(b *testing.B) {
-				benchmarkHash(b, size*MB, algh)
-			})
-		default:
-			b.Run(name+"/std", func(b *testing.B) {
-				benchmarkHash(b, size*MB, stdh)
-			})
+		for _, page := range pages {
+			name := fmt.Sprintf("%dMB/%dpages", size, page)
+			switch {
+			case *flagBenchSTD && *flagBenchALG:
+				b.Fatal("cannot specify both '-bench.std' and '-bench.alg'")
+			case *flagBenchSTD:
+				b.Run(name, func(b *testing.B) {
+					benchmarkHash(b, size*MB, page, stdh)
+				})
+			case *flagBenchALG:
+				b.Run(name, func(b *testing.B) {
+					benchmarkHash(b, size*MB, page, algh)
+				})
+			default:
+				b.Run(name+"/std", func(b *testing.B) {
+					benchmarkHash(b, size*MB, page, stdh)
+				})
 
-			b.Run(name+"/alg", func(b *testing.B) {
-				benchmarkHash(b, size*MB, algh)
-			})
+				b.Run(name+"/alg", func(b *testing.B) {
+					benchmarkHash(b, size*MB, page, algh)
+				})
+			}
 		}
 	}
 }
 
-func benchmarkHash(b *testing.B, n int64, h hash.Hash) {
+func benchmarkHash(b *testing.B, n int64, pages int, h hash.Hash) {
+	copyBuf := make([]byte, os.Getpagesize()*pages)
+
 	b.ReportAllocs()
 	b.ResetTimer()
 
 	for i := 0; i < b.N; i++ {
 		r := limitReader(n)
 
-		if nn, err := io.Copy(h, r); err != nil || int64(nn) != n {
+		if nn, err := io.CopyBuffer(h, r, copyBuf); err != nil || int64(nn) != n {
 			b.Fatalf("failed to copy: %q\n- want bytes: %d\n-  got bytes: %d",
 				err, n, nn)
 		}

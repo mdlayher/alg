@@ -128,5 +128,6 @@ type noopSocket struct{}
 func (s *noopSocket) Accept() (socket, error)                            { return nil, nil }
 func (s *noopSocket) Bind(sa unix.Sockaddr) error                        { return nil }
 func (s *noopSocket) Close() error                                       { return nil }
+func (s *noopSocket) FD() int                                            { return 0 }
 func (s *noopSocket) Read(p []byte) (int, error)                         { return 0, nil }
 func (s *noopSocket) Sendto(p []byte, flags int, to unix.Sockaddr) error { return nil }
