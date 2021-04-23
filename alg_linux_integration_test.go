@@ -8,47 +8,41 @@ import (
 	"crypto/sha1"
 	"crypto/sha256"
 	"encoding/hex"
-	"flag"
 	"fmt"
 	"hash"
 	"io"
-	"log"
 	"os"
 	"testing"
 
 	"github.com/mdlayher/alg"
 )
 
-const MB = (1 << 20)
+const MB = 1 << 20
 
 var buf = bytes.Repeat([]byte("a"), 512*MB)
 
 // Flags to specify using either stdlib or AF_ALG transformations.
-var (
-	flagBenchSTD = flag.Bool("bench.std", false, "benchmark only standard library transformations")
-	flagBenchALG = flag.Bool("bench.alg", false, "benchmark only AF_ALG transformations")
-)
-
-func init() {
-	flag.Parse()
-}
+//var (
+//	flagBenchSTD = flag.Bool("bench.std", false, "benchmark only standard library transformations")
+//	flagBenchALG = flag.Bool("bench.alg", false, "benchmark only AF_ALG transformations")
+//)
 
 func TestMD5Equal(t *testing.T) {
-	const expect = "0829f71740aab1ab98b33eae21dee122"
+	const expect = "221994040b14294bdf7fbc128e66633c"
 	withHash(t, "md5", func(algh hash.Hash) {
 		testHashEqual(t, expect, md5.New(), algh)
 	})
 }
 
 func TestSHA1Equal(t *testing.T) {
-	const expect = "0631457264ff7f8d5fb1edc2c0211992a67c73e6"
+	const expect = "2727756cfee3fbfe24bf5650123fd7743d7b3465"
 	withHash(t, "sha1", func(algh hash.Hash) {
 		testHashEqual(t, expect, sha1.New(), algh)
 	})
 }
 
 func TestSHA256Equal(t *testing.T) {
-	const expect = "9f1dcbc35c350d6027f98be0f5c8b43b42ca52b7604459c0c42be3aa88913d47"
+	const expect = "dd4e6730520932767ec0a9e33fe19c4ce24399d6eba4ff62f13013c9ed30ef87"
 	withHash(t, "sha256", func(algh hash.Hash) {
 		testHashEqual(t, expect, sha256.New(), algh)
 	})
@@ -89,7 +83,6 @@ func testHashEqual(t *testing.T, expect string, stdh, algh hash.Hash) {
 
 	cb := stdh.Sum(nil)
 	ab := algh.Sum(nil)
-	log.Printf("%x\n%x", cb, ab)
 
 	if want, got := cb, ab; !bytes.Equal(want, got) {
 		t.Fatalf("unexpected hash sum:\n- std: %x\n- alg: %x", want, got)
@@ -124,26 +117,12 @@ func benchmarkHashes(b *testing.B, stdh, algh hash.Hash) {
 	for _, size := range sizes {
 		for _, page := range pages {
 			name := fmt.Sprintf("%dMB/%dpages", size, page)
-			switch {
-			case *flagBenchSTD && *flagBenchALG:
-				b.Fatal("cannot specify both '-bench.std' and '-bench.alg'")
-			case *flagBenchSTD:
-				b.Run(name, func(b *testing.B) {
-					benchmarkHash(b, size*MB, page, stdh)
-				})
-			case *flagBenchALG:
-				b.Run(name, func(b *testing.B) {
-					benchmarkHash(b, size*MB, page, algh)
-				})
-			default:
-				b.Run(name+"/std", func(b *testing.B) {
-					benchmarkHash(b, size*MB, page, stdh)
-				})
-
-				b.Run(name+"/alg", func(b *testing.B) {
-					benchmarkHash(b, size*MB, page, algh)
-				})
-			}
+			b.Run(name, func(b *testing.B) {
+				benchmarkHash(b, size*MB, page, stdh)
+			})
+			b.Run(name, func(b *testing.B) {
+				benchmarkHash(b, size*MB, page, algh)
+			})
 		}
 	}
 }

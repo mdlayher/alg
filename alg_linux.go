@@ -4,10 +4,14 @@ package alg
 
 import (
 	"fmt"
+	"io"
+	"os"
 	"syscall"
 
 	"golang.org/x/sys/unix"
 )
+
+const defaultSocketBufferSize = 64 * 1024
 
 // A conn is the internal connection type for Linux.
 type conn struct {
@@ -26,7 +30,7 @@ type socket interface {
 	Sendto(p []byte, flags int, to unix.Sockaddr) error
 }
 
-// dial is the entry point for Dial.  dial opens an AF_ALG socket
+// dial is the entry point for Dial. dial opens an AF_ALG socket
 // using system calls.
 func dial(typ, name string, config *Config) (*conn, error) {
 	fd, err := unix.Socket(unix.AF_ALG, unix.SOCK_SEQPACKET, 0)
@@ -101,6 +105,66 @@ type ihash struct {
 // Close closes the ihash's socket.
 func (h *ihash) Close() error {
 	return h.s.Close()
+}
+
+func (h *ihash) ReadFrom(r io.Reader) (int64, error) {
+	if f, ok := r.(*os.File); ok {
+		return h.readFromFile(f, -1)
+	}
+	if lr, ok := r.(*io.LimitedReader); ok {
+		if f, ok := lr.R.(*os.File); ok {
+			return h.readFromFile(f, lr.N)
+		}
+	}
+	return genericReadFrom(h, r)
+}
+
+func (h *ihash) readFromFile(f *os.File, limit int64) (int64, error) {
+	offset, err := f.Seek(0, io.SeekCurrent)
+	if err != nil {
+		return 0, err
+	}
+	fi, err := f.Stat()
+	if err != nil {
+		return 0, err
+	}
+	if limit == -1 {
+		limit = fi.Size() - offset
+	}
+	// mmap must align on a page boundary
+	// mmap from 0, use data from offset
+	bytes, err := syscall.Mmap(int(f.Fd()), 0, int(fi.Size()),
+		syscall.PROT_READ, syscall.MAP_SHARED)
+	if err != nil {
+		return 0, err
+	}
+	bytes = bytes[offset : offset+limit]
+	defer syscall.Munmap(bytes)
+
+	var (
+		total = len(bytes)
+		start = 0
+		end   = defaultSocketBufferSize
+	)
+
+	if end > total {
+		end = total
+	}
+	for {
+		n, err := h.Write(bytes[start:end])
+		if err != nil {
+			return int64(start + n), err
+		}
+		start += n
+		if start >= total {
+			break
+		}
+		end += n
+		if end > total {
+			end = total
+		}
+	}
+	return int64(total), nil
 }
 
 // Write writes data to an AF_ALG socket, but instructs the kernel
@@ -198,4 +262,15 @@ func (p *sysPipe) Vmsplice(b []byte, flags int) (int, error) {
 		[]unix.Iovec{iov},
 		flags,
 	)
+}
+
+type writerOnly struct {
+	io.Writer
+}
+
+// Fallback implementation of io.ReaderFrom's ReadFrom, when os.File isn't
+// applicable.
+func genericReadFrom(w io.Writer, r io.Reader) (n int64, err error) {
+	// Use wrapper to hide existing r.ReadFrom from io.Copy.
+	return io.Copy(writerOnly{w}, r)
 }
