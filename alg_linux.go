@@ -109,9 +109,9 @@ func (h *ihash) Close() error {
 
 func (h *ihash) ReadFrom(r io.Reader) (int64, error) {
 	if f, ok := r.(*os.File); ok {
-		if w, err, handled := h.sendfile(f, -1); handled {
-			return w, err
-		}
+		//if w, err, handled := h.sendfile(f, -1); handled {
+		//	return w, err
+		//}
 		if w, err, handled := h.splice(f, -1); handled {
 			return w, err
 		}
@@ -124,9 +124,9 @@ func (h *ihash) ReadFrom(r io.Reader) (int64, error) {
 
 func (h *ihash) readFromLimitedReader(lr *io.LimitedReader) (int64, error) {
 	if f, ok := lr.R.(*os.File); ok {
-		if w, err, handled := h.sendfile(f, lr.N); handled {
-			return w, err
-		}
+		//if w, err, handled := h.sendfile(f, lr.N); handled {
+		//	return w, err
+		//}
 		if w, err, handled := h.splice(f, lr.N); handled {
 			return w, err
 		}
@@ -224,24 +224,13 @@ func (h *ihash) sendfile(f *os.File, remain int64) (written int64, err error, ha
 
 // Write writes data to an AF_ALG socket, but instructs the kernel
 // not to finalize the hash.
-func (h *ihash) Write(b []byte) (written int, err error) {
-	for {
-		n, err := h.pipes[1].Vmsplice(b, 0)
-		written += n
-		if err != nil {
-			break
-		}
-		_, err = h.pipes[0].Splice(h.s.FD(), n, unix.SPLICE_F_MOVE|unix.SPLICE_F_MORE)
-		if err != nil {
-			break
-		}
-		if n >= len(b) {
-			break
-		}
-		b = b[n:]
+func (h *ihash) Write(b []byte) (int, error) {
+	n, err := h.pipes[1].Vmsplice(b, 0)
+	if err != nil {
+		return n, err
 	}
-
-	return
+	_, err = h.pipes[0].Splice(h.s.FD(), n, unix.SPLICE_F_MOVE|unix.SPLICE_F_MORE)
+	return n, err
 }
 
 // Sum reads data from an AF_ALG socket, and appends it to the input
