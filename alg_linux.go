@@ -109,36 +109,51 @@ func (h *ihash) Close() error {
 
 func (h *ihash) ReadFrom(r io.Reader) (int64, error) {
 	if f, ok := r.(*os.File); ok {
-		return h.readFromFile(f, -1)
+		if w, err, handled := h.sendfile(f, -1); handled {
+			return w, err
+		}
+		if w, err, handled := h.splice(f, -1); handled {
+			return w, err
+		}
 	}
 	if lr, ok := r.(*io.LimitedReader); ok {
-		if f, ok := lr.R.(*os.File); ok {
-			return h.readFromFile(f, lr.N)
-		}
+		return h.readFromLimitedReader(lr)
 	}
 	return genericReadFrom(h, r)
 }
 
-func (h *ihash) readFromFile(f *os.File, limit int64) (int64, error) {
+func (h *ihash) readFromLimitedReader(lr *io.LimitedReader) (int64, error) {
+	if f, ok := lr.R.(*os.File); ok {
+		if w, err, handled := h.sendfile(f, lr.N); handled {
+			return w, err
+		}
+		if w, err, handled := h.splice(f, lr.N); handled {
+			return w, err
+		}
+	}
+	return genericReadFrom(h, lr)
+}
+
+func (h *ihash) splice(f *os.File, remain int64) (written int64, err error, handled bool) {
 	offset, err := f.Seek(0, io.SeekCurrent)
 	if err != nil {
-		return 0, err
+		return 0, nil, false
 	}
 	fi, err := f.Stat()
 	if err != nil {
-		return 0, err
+		return 0, nil, false
 	}
-	if limit == -1 {
-		limit = fi.Size() - offset
+	if remain == -1 {
+		remain = fi.Size() - offset
 	}
 	// mmap must align on a page boundary
 	// mmap from 0, use data from offset
 	bytes, err := syscall.Mmap(int(f.Fd()), 0, int(fi.Size()),
 		syscall.PROT_READ, syscall.MAP_SHARED)
 	if err != nil {
-		return 0, err
+		return 0, nil, false
 	}
-	bytes = bytes[offset : offset+limit]
+	bytes = bytes[offset : offset+remain]
 	defer syscall.Munmap(bytes)
 
 	var (
@@ -153,7 +168,7 @@ func (h *ihash) readFromFile(f *os.File, limit int64) (int64, error) {
 	for {
 		n, err := h.Write(bytes[start:end])
 		if err != nil {
-			return int64(start + n), err
+			return int64(start + n), err, true
 		}
 		start += n
 		if start >= total {
@@ -164,23 +179,69 @@ func (h *ihash) readFromFile(f *os.File, limit int64) (int64, error) {
 			end = total
 		}
 	}
-	return int64(total), nil
+	return remain, nil, true
+}
+
+func (h *ihash) sendfile(f *os.File, remain int64) (written int64, err error, handled bool) {
+	offset, err := f.Seek(0, io.SeekCurrent)
+	if err != nil {
+		return 0, nil, false
+	}
+	fi, err := f.Stat()
+	if err != nil {
+		return 0, nil, false
+	}
+	if remain == -1 {
+		remain = fi.Size() - offset
+	}
+	sc, err := f.SyscallConn()
+	if err != nil {
+		return 0, nil, false
+	}
+	var (
+		n    int
+		werr error
+	)
+	err = sc.Read(func(fd uintptr) bool {
+		for {
+			n, werr = syscall.Sendfile(h.s.FD(), int(fd), &offset, int(remain))
+			if werr != nil {
+				break
+			}
+			if int64(n) >= remain {
+				break
+			}
+			remain -= int64(n)
+			written += int64(n)
+		}
+		return true
+	})
+	if err == nil {
+		err = werr
+	}
+	return written, err, true
 }
 
 // Write writes data to an AF_ALG socket, but instructs the kernel
 // not to finalize the hash.
-func (h *ihash) Write(b []byte) (int, error) {
-	n, err := h.pipes[1].Vmsplice(b, 0)
-	if err != nil {
-		return 0, err
+func (h *ihash) Write(b []byte) (written int, err error) {
+	for {
+		n, err := h.pipes[1].Vmsplice(b, 0)
+		written += n
+		if err != nil {
+			break
+		}
+		_, err = h.pipes[0].Splice(h.s.FD(), n, unix.SPLICE_F_MOVE|unix.SPLICE_F_MORE)
+		if err != nil {
+			break
+		}
+		if n >= len(b) {
+			break
+		}
+		b = b[n:]
 	}
 
-	_, err = h.pipes[0].Splice(h.s.FD(), n, unix.SPLICE_F_MOVE|unix.SPLICE_F_MORE)
-	if err != nil {
-		return 0, err
-	}
-
-	return len(b), nil
+	return
 }
 
 // Sum reads data from an AF_ALG socket, and appends it to the input
