@@ -109,9 +109,9 @@ func (h *ihash) Close() error {
 
 func (h *ihash) ReadFrom(r io.Reader) (int64, error) {
 	if f, ok := r.(*os.File); ok {
-		//if w, err, handled := h.sendfile(f, -1); handled {
-		//	return w, err
-		//}
+		if w, err, handled := h.sendfile(f, -1); handled {
+			return w, err
+		}
 		if w, err, handled := h.splice(f, -1); handled {
 			return w, err
 		}
@@ -124,9 +124,9 @@ func (h *ihash) ReadFrom(r io.Reader) (int64, error) {
 
 func (h *ihash) readFromLimitedReader(lr *io.LimitedReader) (int64, error) {
 	if f, ok := lr.R.(*os.File); ok {
-		//if w, err, handled := h.sendfile(f, lr.N); handled {
-		//	return w, err
-		//}
+		if w, err, handled := h.sendfile(f, lr.N); handled {
+			return w, err
+		}
 		if w, err, handled := h.splice(f, lr.N); handled {
 			return w, err
 		}
