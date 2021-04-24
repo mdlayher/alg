@@ -205,6 +205,7 @@ func (h *ihash) sendfile(f *os.File, remain int64) (written int64, err error, ha
 	err = sc.Read(func(fd uintptr) bool {
 		for {
 			n, werr = syscall.Sendfile(h.s.FD(), int(fd), &offset, int(remain))
+			written += int64(n)
 			if werr != nil {
 				break
 			}
@@ -212,7 +213,6 @@ func (h *ihash) sendfile(f *os.File, remain int64) (written int64, err error, ha
 				break
 			}
 			remain -= int64(n)
-			written += int64(n)
 		}
 		return true
 	})
@@ -301,6 +301,7 @@ type sysPipe struct {
 func (p *sysPipe) Splice(out, size, flags int) (int64, error) {
 	return unix.Splice(p.fd, nil, out, nil, size, flags)
 }
+
 func (p *sysPipe) Vmsplice(b []byte, flags int) (int, error) {
 	iov := unix.Iovec{
 		Base: &b[0],
