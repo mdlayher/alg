@@ -3,29 +3,28 @@
 package alg
 
 import (
-	"bytes"
-	"reflect"
+	"encoding/hex"
 	"testing"
 
 	"golang.org/x/sys/unix"
 )
 
-func TestLinuxConn_bind(t *testing.T) {
-	addr := &unix.SockaddrALG{
-		Type: "hash",
-		Name: "sha1",
-	}
-
-	s := &testSocket{}
-	if _, err := bind(s, addr); err != nil {
-		t.Fatalf("failed to bind: %v", err)
-	}
-
-	if want, got := addr, s.bind; !reflect.DeepEqual(want, got) {
-		t.Fatalf("unexpected bind address:\n- want: %#v\n-  got: %#v",
-			want, got)
-	}
-}
+//func TestLinuxConn_bind(t *testing.T) {
+//	addr := &unix.SockaddrALG{
+//		Type: "hash",
+//		Name: "sha1",
+//	}
+//
+//	s := &testSocket{}
+//	if _, err := bind(s, addr); err != nil {
+//		t.Fatalf("failed to bind: %v", err)
+//	}
+//
+//	if want, got := addr, s.bind; !reflect.DeepEqual(want, got) {
+//		t.Fatalf("unexpected bind address:\n- want: %#v\n-  got: %#v",
+//			want, got)
+//	}
+//}
 
 func TestLinuxConnWrite(t *testing.T) {
 	addr := &unix.SockaddrALG{
@@ -33,26 +32,11 @@ func TestLinuxConnWrite(t *testing.T) {
 		Name: "sha1",
 	}
 
-	h, s := testLinuxHash(t, addr)
+	h, _ := testLinuxHash(t, addr)
 
 	b := []byte("hello world")
 	if _, err := h.Write(b); err != nil {
 		t.Fatalf("failed to write: %v", err)
-	}
-
-	if want, got := b, s.sendto.p; !bytes.Equal(want, got) {
-		t.Fatalf("unexpected sendto bytes:\n- want: %v\n-  got: %v",
-			want, got)
-	}
-
-	if want, got := unix.MSG_MORE, s.sendto.flags; want != got {
-		t.Fatalf("unexpected sendto flags:\n- want: %v\n-  got: %v",
-			want, got)
-	}
-
-	if want, got := addr, s.sendto.to; !reflect.DeepEqual(want, got) {
-		t.Fatalf("unexpected sendto addr:\n- want: %v\n-  got: %v",
-			want, got)
 	}
 }
 
@@ -62,20 +46,24 @@ func TestLinuxConnSum(t *testing.T) {
 		Name: "sha1",
 	}
 
-	h, s := testLinuxHash(t, addr)
-	s.read = []byte("deadbeef")
+	h, _ := testLinuxHash(t, addr)
 
-	sum := h.Sum([]byte("foo"))
+	sum := h.Sum(nil)
+	hex.EncodeToString(sum)
 
-	if want, got := []byte("foodeadbeef"), sum; !bytes.Equal(want, got) {
+	if want, got := "da39a3ee5e6b4b0d3255bfef95601890afd80709", hex.EncodeToString(sum); want != got {
 		t.Fatalf("unexpected sum bytes:\n- want: %v\n-  got: %v",
 			want, got)
 	}
 }
 
-func testLinuxHash(t *testing.T, addr *unix.SockaddrALG) (Hash, *testSocket) {
-	s := &testSocket{}
-	c, err := bind(s, addr)
+func testLinuxHash(t *testing.T, addr *unix.SockaddrALG) (Hash, *sysSocket) {
+	fd, err := unix.Socket(unix.AF_ALG, unix.SOCK_SEQPACKET, 0)
+	if err != nil {
+		t.Fatalf("failed to create socket: %v", err)
+	}
+
+	c, err := bind(&sysSocket{fd: fd}, addr)
 	if err != nil {
 		t.Fatalf("failed to bind: %v", err)
 	}
@@ -86,7 +74,7 @@ func testLinuxHash(t *testing.T, addr *unix.SockaddrALG) (Hash, *testSocket) {
 	}
 
 	// A little gross, but gets the job done.
-	return hash, hash.(*ihash).s.(*testSocket)
+	return hash, hash.(*ihash).s.(*sysSocket)
 }
 
 var _ socket = &testSocket{}

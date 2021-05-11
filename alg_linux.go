@@ -4,10 +4,14 @@ package alg
 
 import (
 	"fmt"
+	"io"
+	"os"
 	"syscall"
 
 	"golang.org/x/sys/unix"
 )
+
+const defaultSocketBufferSize = 64 * 1024
 
 // A conn is the internal connection type for Linux.
 type conn struct {
@@ -26,7 +30,7 @@ type socket interface {
 	Sendto(p []byte, flags int, to unix.Sockaddr) error
 }
 
-// dial is the entry point for Dial.  dial opens an AF_ALG socket
+// dial is the entry point for Dial. dial opens an AF_ALG socket
 // using system calls.
 func dial(typ, name string, config *Config) (*conn, error) {
 	fd, err := unix.Socket(unix.AF_ALG, unix.SOCK_SEQPACKET, 0)
@@ -103,20 +107,129 @@ func (h *ihash) Close() error {
 	return h.s.Close()
 }
 
+func (h *ihash) ReadFrom(r io.Reader) (int64, error) {
+	if f, ok := r.(*os.File); ok {
+		if w, err, handled := h.sendfile(f, -1); handled {
+			return w, err
+		}
+		if w, err, handled := h.splice(f, -1); handled {
+			return w, err
+		}
+	}
+	if lr, ok := r.(*io.LimitedReader); ok {
+		return h.readFromLimitedReader(lr)
+	}
+	return genericReadFrom(h, r)
+}
+
+func (h *ihash) readFromLimitedReader(lr *io.LimitedReader) (int64, error) {
+	if f, ok := lr.R.(*os.File); ok {
+		if w, err, handled := h.sendfile(f, lr.N); handled {
+			return w, err
+		}
+		if w, err, handled := h.splice(f, lr.N); handled {
+			return w, err
+		}
+	}
+	return genericReadFrom(h, lr)
+}
+
+func (h *ihash) splice(f *os.File, remain int64) (written int64, err error, handled bool) {
+	offset, err := f.Seek(0, io.SeekCurrent)
+	if err != nil {
+		return 0, nil, false
+	}
+	fi, err := f.Stat()
+	if err != nil {
+		return 0, nil, false
+	}
+	if remain == -1 {
+		remain = fi.Size() - offset
+	}
+	// mmap must align on a page boundary
+	// mmap from 0, use data from offset
+	mmap, err := syscall.Mmap(int(f.Fd()), 0, int(fi.Size()),
+		syscall.PROT_READ, syscall.MAP_SHARED)
+	if err != nil {
+		return 0, nil, false
+	}
+	defer syscall.Munmap(mmap)
+	bytes := mmap[offset : offset+remain]
+	var (
+		total = len(bytes)
+		start = 0
+		end   = defaultSocketBufferSize
+	)
+
+	if end > total {
+		end = total
+	}
+	for {
+		n, err := h.Write(bytes[start:end])
+		if err != nil {
+			return int64(start + n), err, true
+		}
+		start += n
+		if start >= total {
+			break
+		}
+		end += n
+		if end > total {
+			end = total
+		}
+	}
+	return remain, nil, true
+}
+
+func (h *ihash) sendfile(f *os.File, remain int64) (written int64, err error, handled bool) {
+	offset, err := f.Seek(0, io.SeekCurrent)
+	if err != nil {
+		return 0, nil, false
+	}
+	fi, err := f.Stat()
+	if err != nil {
+		return 0, nil, false
+	}
+	if remain == -1 {
+		remain = fi.Size() - offset
+	}
+	sc, err := f.SyscallConn()
+	if err != nil {
+		return 0, nil, false
+	}
+	var (
+		n    int
+		werr error
+	)
+	err = sc.Read(func(fd uintptr) bool {
+		for {
+			n, werr = syscall.Sendfile(h.s.FD(), int(fd), &offset, int(remain))
+			written += int64(n)
+			if werr != nil {
+				break
+			}
+			if int64(n) >= remain {
+				break
+			}
+			remain -= int64(n)
+		}
+		return true
+	})
+	if err == nil {
+		err = werr
+	}
+	return written, err, true
+}
+
 // Write writes data to an AF_ALG socket, but instructs the kernel
 // not to finalize the hash.
 func (h *ihash) Write(b []byte) (int, error) {
 	n, err := h.pipes[1].Vmsplice(b, 0)
 	if err != nil {
-		return 0, err
+		return n, err
 	}
-
 	_, err = h.pipes[0].Splice(h.s.FD(), n, unix.SPLICE_F_MOVE|unix.SPLICE_F_MORE)
-	if err != nil {
-		return 0, err
-	}
-
-	return len(b), nil
+	return n, err
 }
 
 // Sum reads data from an AF_ALG socket, and appends it to the input
@@ -187,6 +300,7 @@ type sysPipe struct {
 func (p *sysPipe) Splice(out, size, flags int) (int64, error) {
 	return unix.Splice(p.fd, nil, out, nil, size, flags)
 }
+
 func (p *sysPipe) Vmsplice(b []byte, flags int) (int, error) {
 	iov := unix.Iovec{
 		Base: &b[0],
@@ -198,4 +312,15 @@ func (p *sysPipe) Vmsplice(b []byte, flags int) (int, error) {
 		[]unix.Iovec{iov},
 		flags,
 	)
+}
+
+type writerOnly struct {
+	io.Writer
+}
+
+// Fallback implementation of io.ReaderFrom's ReadFrom, when os.File isn't
+// applicable.
+func genericReadFrom(w io.Writer, r io.Reader) (n int64, err error) {
+	// Use wrapper to hide existing r.ReadFrom from io.Copy.
+	return io.Copy(writerOnly{w}, r)
 }
