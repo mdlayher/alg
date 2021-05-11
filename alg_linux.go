@@ -148,14 +148,13 @@ func (h *ihash) splice(f *os.File, remain int64) (written int64, err error, hand
 	}
 	// mmap must align on a page boundary
 	// mmap from 0, use data from offset
-	bytes, err := syscall.Mmap(int(f.Fd()), 0, int(fi.Size()),
+	mmap, err := syscall.Mmap(int(f.Fd()), 0, int(fi.Size()),
 		syscall.PROT_READ, syscall.MAP_SHARED)
 	if err != nil {
 		return 0, nil, false
 	}
-	bytes = bytes[offset : offset+remain]
-	defer syscall.Munmap(bytes)
-
+	defer syscall.Munmap(mmap)
+	bytes := mmap[offset : offset+remain]
 	var (
 		total = len(bytes)
 		start = 0
